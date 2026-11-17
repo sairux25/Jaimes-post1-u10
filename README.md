@@ -134,3 +134,16 @@ En la primera prueba el programa de la guía mostró VmRSS de 2080 kB antes y de
 | Después del memset | 105132 kB | 104140 kB |
 
 VmPeak ya incluye los 100 MB desde el inicio porque malloc reserva las direcciones virtuales, pero el VmRSS solo crece después del memset, exactamente 102400 kB, que son los 100 MB. Esto se debe a que malloc no genera page faults inmediatamente, ya que el kernel usa demand paging y solo asigna un marco físico cuando el proceso escribe por primera vez en cada página. Con /usr/bin/time -v se registraron 26008 minor faults, cerca de las 25 600 páginas de 4 KB que tienen 100 MB más las del arranque del programa. Un minor fault se resuelve en RAM sin leer el disco, en cambio un major fault necesita traer la página desde el disco, y en esta corrida solo hubo 1, junto con una sola entrada de sistema de archivos en el mismo reporte.
+
+## Checkpoint 4 — Costo medido de un minor page fault
+Capturas: capturas/p2_cp4_compilacion.png y capturas/p2_cp4_ejecucion.png
+
+Se creó mmap_fault_cost.c, que reserva 200 páginas con mmap anónimo y mide con clock_gettime el primer y el segundo toque de cada una. El código de la guía funcionó sin cambios y se ejecutó tres veces seguidas.
+
+| Corrida | Primer toque | Segundo toque | Overhead del fault |
+|---|---|---|---|
+| 1 | 3667.1 ns | 57.8 ns | 3609.3 ns |
+| 2 | 2968.8 ns | 51.7 ns | 2917.1 ns |
+| 3 | 3088.7 ns | 79.5 ns | 3009.2 ns |
+
+En las tres corridas el primer toque fue entre 39 y 63 veces más caro que el segundo, porque al tocar por primera vez la página el procesador hace un trap al kernel, que asigna un marco físico y actualiza la tabla de páginas. El segundo toque ya encuentra la traducción resuelta y solo paga el acceso normal más la propia medición. El overhead atribuible al page fault quedó entre 2917 y 3609 ns, mientras que en la Parte 1 el acceso aleatorio a un array de 64 MB en RAM costó 35.807 ns. Por lo tanto un minor page fault cuesta entre 80 y 100 veces más que un acceso a RAM, es decir, unos dos órdenes de magnitud por encima.

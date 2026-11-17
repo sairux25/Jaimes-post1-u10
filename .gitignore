@@ -6,3 +6,4 @@ cwsdpmi.exe
 cache_bench
 mymaps
 pagefault_demo
+mmap_fault_cost

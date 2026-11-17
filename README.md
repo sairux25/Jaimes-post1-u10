@@ -5,7 +5,7 @@ Este repositorio contiene el desarrollo de las dos partes del laboratorio guiado
 
 ## Entorno utilizado
 
-Ubuntu 24.04.5 LTS sobre WSL2 en Windows 11, con kernel 6.18.58.1-microsoft-standard-WSL2 y gcc 13.3.0. El procesador es un Intel Core i7-13620H y el tamaño de página del sistema es de 4096 bytes. Los programas se compilaron y ejecutaron directamente en la carpeta del repositorio para que el código y las capturas quedaran en el mismo lugar.
+Ubuntu 24.04.5 LTS sobre WSL2 en Windows 11, con kernel 6.18.58.1-microsoft-standard-WSL2 y gcc 13.3.0. El procesador es un Intel Core i7-13620H y el tamaño de página del sistema es de 4096 bytes. Los programas se compilaron y ejecutaron directamente en la carpeta del repositorio para que el código y las capturas quedaran en el mismo lugar. Para la Parte 2 se usaron además pmap, vmstat y free de procps-ng 4.0.4 y el comando /usr/bin/time de GNU.
 
 # PARTE 1 — Benchmark de Jerarquía de Caché
 
@@ -88,3 +88,37 @@ El flag -fno-prefetch-loop-arrays no tiene ningún efecto sobre el prefetcher de
 En teoría el patrón más sensible es el secuencial, porque es el único que el compilador puede predecir, mientras que el aleatorio y el de stride de 4096 son casi insensibles porque dependen de la mezcla Fisher-Yates o de conflictos en un set. Sin embargo, aquí las 5 instrucciones quedaron en bench_rand y ninguna en bench_seq ni en bench_stride, porque el volatile impide que el compilador toque esos accesos. Por eso el secuencial dio casi igual con ambos flags, por ejemplo 1.339 y 1.343 ns en 4 MB.
 
 La conclusión válida pero limitada es que comparar los dos flags solo mide el prefetch por software del compilador. El prefetcher de hardware siguió activo en ambas corridas y apagarlo requiere registros MSR o la BIOS. Además, el stride pasó de 0.592 y 1.126 ns a 1.450 y 1.883 ns sin tener ninguna instrucción de prefetch, así que esa diferencia es variación entre corridas.
+
+# PARTE 2 — Análisis de Memoria Virtual en Linux
+
+## Checkpoint 1 — Regiones del mapa de memoria
+Capturas: capturas/p2_cp1_compilacion.png y capturas/p2_cp1_maps.png
+
+En la primera prueba se usó la línea gcc -o mymaps mymaps.c && ./mymaps & tal como aparece en la guía, y el cat mostró el mapa de /usr/bin/bash en lugar del de mymaps. Esto pasó porque el & manda a segundo plano toda la línea, así que $! guardó el PID de la subshell que compilaba y no el del programa. Por lo tanto se compiló primero y luego se lanzó ./mymaps & por separado, sin tocar el código. Hecho esto, $! coincidió con el PID 3204 que imprimió el programa y el mapa mostró sus regiones mientras getchar() lo mantenía vivo.
+
+| Región | Rango | Permisos | Propósito |
+|---|---|---|---|
+| Texto de mymaps | 5c3b985dd000-5c3b985de000 | r-xp | Código del programa, se lee y se ejecuta pero no se modifica |
+| Solo lectura de mymaps | 5c3b985dc000-5c3b985dd000 y 5c3b985de000-5c3b985e0000 | r--p | Cabecera del ejecutable y constantes como la cadena "hola" |
+| Datos de mymaps | 5c3b985e0000-5c3b985e1000 | rw-p | Variables globales como global_data (0x5c3b985e0010) |
+| Heap | 5c3ba9c12000-5c3ba9c33000 | rw-p | Memoria dinámica pequeña que crece con brk |
+| Anónima del malloc | 72c9996ff000-72c999800000 | rw-p | Bloque de 1 MB del malloc (0x72c9996ff010) |
+| libc | 72c999828000-72c9999b1000 | r-xp | Código de la biblioteca estándar compartida |
+| vDSO | 72c999a53000-72c999a55000 | r-xp | Funciones del kernel que se ejecutan sin llamada al sistema, como clock_gettime |
+| ld-linux | 72c999a56000-72c999a81000 | r-xp | Cargador dinámico que enlaza las bibliotecas al iniciar |
+| Pila | 7ffed5a76000-7ffed5a97000 | rw-p | Variables locales como heap (0x7ffed5a95800) |
+
+La p final de los permisos indica que cada región es privada del proceso, y solo el texto, libc, el vDSO y ld-linux tienen permiso de ejecución. Además, el bloque de 1 MB no quedó dentro de [heap] sino en una región anónima propia, porque malloc atiende las reservas grandes con mmap en lugar de hacer crecer el heap.
+
+## Checkpoint 2 — Clasificación de páginas en smaps
+Capturas: capturas/p2_cp2_smaps.png, capturas/p2_cp2_smaps_regiones.png, capturas/p2_cp2_pmap.png y capturas/p2_cp2_vmstat_free.png
+
+Con cat /proc/$$/smaps | head -60 se revisó la shell y se vio que cada región trae Size, Rss, Shared_Clean, Private_Dirty, Referenced y otros campos. Como las primeras 60 líneas solo cubren el binario de bash, se buscaron con grep las regiones del heap, la pila y el código de libc.
+
+| Región | Rss | Shared_Clean | Private_Dirty |
+|---|---|---|---|
+| [heap] | 1428 kB | 0 kB | 1428 kB |
+| [stack] | 112 kB | 0 kB | 112 kB |
+| libc.so.6 r-xp | 1440 kB | 1184 kB | 0 kB |
+
+El heap y la pila son Private_Dirty porque son páginas anónimas que la shell escribió y que no existen en ningún archivo, así que pertenecen solo a ese proceso y no se pueden compartir. En cambio, el código de libc es Shared_Clean porque se carga desde el archivo libc.so.6, nunca se modifica y las mismas páginas físicas las usan todos los procesos que tienen libc. Por eso su Pss de 605 kB es menor que su Rss, ya que el costo se reparte entre ellos. pmap -x mostró la misma shell con 5944 kB de RSS en total, y vmstat -s y free -h reportaron unos 31 GiB de RAM con 740 MiB usados y el swap sin uso.

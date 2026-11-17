@@ -69,3 +69,22 @@ En la primera prueba con el código de la guía, el stride de 64 bytes y el de 4
 | 4096 B | 6.172 |
 
 Los dos experimentos trabajan sobre el mismo array de 1 MB, que cabe completo en la L2 de 1280 KB, así que la diferencia no se debe a un tamaño de trabajo distinto. La L1d tiene 64 sets con líneas de 64 bytes, por lo que el set lo deciden los bits 6 a 11 de la dirección. Con el stride de 64 bytes los accesos recorren los 64 sets en orden, en cambio con 4096 bytes esos bits nunca cambian y las 256 direcciones caen en el mismo set, que solo guarda 12 líneas. Por eso cada línea nueva desaloja a otra y casi ningún acceso se resuelve en L1, lo que confirma que la penalización viene de los conflictos de asociatividad.
+
+## Checkpoint 5 — Decisiones técnicas de la Parte 1
+Capturas: capturas/p1_cp5_geometria_l1.png, capturas/p1_cp5_prefetch_objdump.png, capturas/p1_cp5_con_prefetch.png y capturas/p1_cp5_sin_prefetch.png
+
+Para respaldar las dos decisiones se leyó la geometría de la L1d desde /sys y se calculó el stride de conflicto. Además, cache_bench.c se compiló con -O2 y cada flag de prefetch, se contaron con objdump las instrucciones de prefetch de cada binario y se ejecutaron los dos.
+
+## Decisión Técnica — Stride que expone mejor los conflictos de asociatividad
+El stride que garantiza que todos los accesos caigan en el mismo set es el tamaño de la caché dividido entre sus vías. Tanto en la L1 de la guía, 32 KB entre 8 vías, como en la L1d de este equipo, 48 KB entre 12 vías, el resultado es 4096 bytes. Con 64 sets y líneas de 64 bytes el índice de set lo forman los bits 6 a 11, y sumar 4096 no cambia ninguno.
+
+Con un stride de 2048 bytes los accesos ya no caerían todos en el mismo set. Sumar 2048 cambia el bit 11, que es parte del índice, así que alternarían entre dos sets y cada uno recibiría la mitad de las líneas en conflicto.
+
+A partir del noveno acceso en la L1 de la guía, o del decimotercero en la de este equipo, cada línea nueva desaloja a una de las que ya están en el set según la política de reemplazo, y el acceso se resuelve en L2 en lugar de L1. Por eso en el Checkpoint 4 el stride de 4096 costó 6.172 ns, mientras que en el Checkpoint 2 los arrays que caben en L1 se leyeron en unos 0.7 ns.
+
+## Decisión Técnica — Prefetch por software del compilador vs prefetcher de hardware
+El flag -fno-prefetch-loop-arrays no tiene ningún efecto sobre el prefetcher de hardware, solo decide si el compilador escribe instrucciones de prefetch en el binario. El prefetcher de hardware actúa dentro del procesador sin importar cómo se compiló el programa. Con objdump se encontraron 5 instrucciones prefetcht0 con -fprefetch-loop-arrays y ninguna con -fno-prefetch-loop-arrays.
+
+En teoría el patrón más sensible es el secuencial, porque es el único que el compilador puede predecir, mientras que el aleatorio y el de stride de 4096 son casi insensibles porque dependen de la mezcla Fisher-Yates o de conflictos en un set. Sin embargo, aquí las 5 instrucciones quedaron en bench_rand y ninguna en bench_seq ni en bench_stride, porque el volatile impide que el compilador toque esos accesos. Por eso el secuencial dio casi igual con ambos flags, por ejemplo 1.339 y 1.343 ns en 4 MB.
+
+La conclusión válida pero limitada es que comparar los dos flags solo mide el prefetch por software del compilador. El prefetcher de hardware siguió activo en ambas corridas y apagarlo requiere registros MSR o la BIOS. Además, el stride pasó de 0.592 y 1.126 ns a 1.450 y 1.883 ns sin tener ninguna instrucción de prefetch, así que esa diferencia es variación entre corridas.

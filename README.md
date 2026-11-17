@@ -147,3 +147,22 @@ Se creó mmap_fault_cost.c, que reserva 200 páginas con mmap anónimo y mide co
 | 3 | 3088.7 ns | 79.5 ns | 3009.2 ns |
 
 En las tres corridas el primer toque fue entre 39 y 63 veces más caro que el segundo, porque al tocar por primera vez la página el procesador hace un trap al kernel, que asigna un marco físico y actualiza la tabla de páginas. El segundo toque ya encuentra la traducción resuelta y solo paga el acceso normal más la propia medición. El overhead atribuible al page fault quedó entre 2917 y 3609 ns, mientras que en la Parte 1 el acceso aleatorio a un array de 64 MB en RAM costó 35.807 ns. Por lo tanto un minor page fault cuesta entre 80 y 100 veces más que un acceso a RAM, es decir, unos dos órdenes de magnitud por encima.
+
+## Checkpoint 5 — Decisiones técnicas de la Parte 2
+Capturas: capturas/p2_cp5_costo_smaps_pmap.png y capturas/p2_cp5_map_populate.png
+
+Para respaldar la primera decisión se comparó el tamaño de /proc/PID/maps y /proc/PID/smaps de la shell y se midió el tiempo de 1000 lecturas de maps, de smaps y de pmap -x. Para la segunda se hizo una copia de mmap_fault_cost.c en /tmp con MAP_POPULATE agregado mediante sed, y se ejecutó junto al programa original.
+
+## Decisión Técnica — /proc/PID/smaps o pmap -x
+pmap -x sí reporta cuánta RAM usa cada región, en su columna RSS, junto con Kbytes, Dirty y los permisos. Sin embargo, no separa Private_Dirty de Shared_Clean ni muestra Referenced o Pss, y tampoco nombra el heap, que en el Checkpoint 2 apareció solo como [ anon ] con 1428 kB.
+
+La diferencia de costo importaría en un script que consulte la memoria de un proceso cada segundo. En la shell, smaps ocupó 32984 bytes contra 4238 de maps, y con cientos de regiones ese volumen crece mucho más. En ese caso conviene pmap -x porque entrega un resumen de 46 líneas con totales, fácil de procesar en cada consulta. Aun así, en 1000 lecturas pmap -x tardó 3.254 s frente a 1.129 s de smaps, porque es un programa aparte que arma su resumen con esa misma información, así que su ventaja está en la salida corta y no en leer menos.
+
+Para una inspección rápida en la terminal se prefiere pmap -x porque muestra la tabla ya resumida sin filtrar a mano con grep o awk. En cambio, smaps es indispensable cuando hay que distinguir páginas compartidas, privadas, sucias o limpias región por región, como en el Checkpoint 2.
+
+## Decisión Técnica — mmap con MAP_POPULATE o demand paging
+Con MAP_POPULATE el primer toque bajaría casi al nivel del segundo, porque el kernel asigna los marcos y llena la tabla de páginas dentro de la propia llamada a mmap. En la prueba, el programa original midió 4658.1 ns en el primer toque, mientras que con MAP_POPULATE midió entre 90.0 y 114.6 ns frente a 45 y 48 ns del segundo. La diferencia que queda se atribuye a que la traducción aún no estaba en el TLB, y ya no a un page fault.
+
+MAP_POPULATE conviene en un servidor que atiende peticiones y necesita una latencia baja y predecible, porque paga todos los faults al arrancar y ninguna petición sufre los 2.9 a 4.6 µs extra por página que se midieron. En cambio, el demand paging conviene a un programa de arranque único o que reserva memoria de forma generosa, ya que solo paga por lo que realmente usa.
+
+Si un proceso reserva 100 MB y solo toca 10 MB, el demand paging evita asignar los 90 MB restantes, es decir, 23 040 marcos de 4 KB que nunca se usarían. Con MAP_POPULATE esos marcos se reservarían y se llenarían de ceros igual, gastando tiempo y RAM que otros procesos podrían necesitar.

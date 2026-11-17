@@ -1,0 +1,6 @@
+*.ova
+*.vdi
+*.iso
+nasm.exe
+cwsdpmi.exe
+cache_bench

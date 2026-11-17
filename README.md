@@ -57,3 +57,15 @@ Se agregó bench_rand, que mezcla un array de índices con Fisher-Yates y luego 
 | 65536 | 7.738 | 35.807 |
 
 Hasta 4 MB el acceso aleatorio se mantiene entre 1.3 y 2.6 ns, porque los datos todavía se encuentran en L1, L2 o L3 y cada fallo de L1 se resuelve en un nivel de caché cercano. En 16 MB, en cambio, el aleatorio sube a 14.627 ns mientras el secuencial queda en 1.977 ns. Ese salto se atribuye sobre todo al TLB miss, ya que 16 MB son 4096 páginas de 4 KB y cada acceso salta a una página distinta que el TLB no alcanza a cubrir. A esto se suma el cache miss en L3, porque el array de índices ocupa el doble que el de datos y entre los dos superan los 24 MB de la L3. En 64 MB el array ya no cabe en ninguna caché, por lo tanto cada lectura aleatoria paga el cache miss hasta RAM y además el TLB miss, y llega a 35.807 ns, unas 4.6 veces el valor secuencial.
+
+## Checkpoint 4 — Conflictos de asociatividad con stride
+Capturas: capturas/p1_cp4_compilacion.png y capturas/p1_cp4_ejecucion.png
+
+En la primera prueba con el código de la guía, el stride de 64 bytes y el de 4096 bytes sobre el array de 1 MB dieron casi lo mismo en tres corridas, entre 4.6 y 5.1 ns por acceso en ambos casos. Esto pasó porque cada acceso calculaba (i * stride) % n_bytes, una división lenta que tapaba la diferencia, y porque con 4096 bytes cada vuelta hace solo 256 accesos, así que la medición era demasiado corta. Por lo tanto se quitó el %, que no cambia ninguna dirección leída porque i * stride nunca llega a n_bytes, y se hizo que los dos strides repitan el recorrido hasta sumar los mismos 1 638 400 accesos. Hecho esto, el stride de 4096 bytes costó 6.172 ns contra 4.818 ns del de 64 bytes, un 28 % más, y en todas las corridas hechas con el ajuste el de 4096 bytes salió más lento.
+
+| Stride | ns/acceso |
+|---|---|
+| 64 B | 4.818 |
+| 4096 B | 6.172 |
+
+Los dos experimentos trabajan sobre el mismo array de 1 MB, que cabe completo en la L2 de 1280 KB, así que la diferencia no se debe a un tamaño de trabajo distinto. La L1d tiene 64 sets con líneas de 64 bytes, por lo que el set lo deciden los bits 6 a 11 de la dirección. Con el stride de 64 bytes los accesos recorren los 64 sets en orden, en cambio con 4096 bytes esos bits nunca cambian y las 256 direcciones caen en el mismo set, que solo guarda 12 líneas. Por eso cada línea nueva desaloja a otra y casi ningún acceso se resuelve en L1, lo que confirma que la penalización viene de los conflictos de asociatividad.

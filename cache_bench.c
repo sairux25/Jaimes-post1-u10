@@ -64,6 +64,30 @@ double bench_rand(size_t n_bytes) {
     return ns/(REPEAT*(double)n); /* ns/acceso */
 }
 
+/* Acceso con stride fijo: expone conflictos de asociatividad.
+ * Cada stride repite el recorrido hasta sumar los mismos accesos
+ * que el stride de una linea, asi ambos se miden con igual trabajo. */
+double bench_stride(size_t n_bytes, size_t stride) {
+    volatile char *arr = (volatile char *)malloc(n_bytes);
+    if (!arr) return -1.0;
+    memset((void*)arr, 1, n_bytes);
+
+    size_t steps = n_bytes / stride;
+    size_t reps = REPEAT * (stride / LINE);
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    for (size_t r = 0; r < reps; r++)
+        for (size_t i = 0; i < steps; i++)
+            (void)arr[i * stride]; /* i * stride nunca llega a n_bytes */
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    free((void*)arr);
+
+    double ns = (t1.tv_sec - t0.tv_sec)*1e9 + (t1.tv_nsec - t0.tv_nsec);
+    return ns / (reps * (double)steps); /* ns/acceso */
+}
+
 int main(void) {
     size_t sizes[] = {
         4*1024, 8*1024, 16*1024, 32*1024,  /* region L1 (L1d de 48K) */
@@ -80,5 +104,12 @@ int main(void) {
         double lat_rand = bench_rand(sizes[i]);
         printf("%-12zu %12.3f %12.3f\n", sizes[i]/1024, lat_seq, lat_rand);
     }
+
+    /* Array de 1 MB, cabe completo en la L2 de 1280K */
+    printf("\n%-12s %10s\n","Stride","ns/acceso");
+    double t_line = bench_stride(1024*1024, 64);    /* una linea de cache */
+    double t_page = bench_stride(1024*1024, 4096);  /* una pagina, mismo set de L1 */
+    printf("%-12s %10.3f\n", "64 B", t_line);
+    printf("%-12s %10.3f\n", "4096 B", t_page);
     return 0;
 }

@@ -122,3 +122,15 @@ Con cat /proc/$$/smaps | head -60 se revisó la shell y se vio que cada región 
 | libc.so.6 r-xp | 1440 kB | 1184 kB | 0 kB |
 
 El heap y la pila son Private_Dirty porque son páginas anónimas que la shell escribió y que no existen en ningún archivo, así que pertenecen solo a ese proceso y no se pueden compartir. En cambio, el código de libc es Shared_Clean porque se carga desde el archivo libc.so.6, nunca se modifica y las mismas páginas físicas las usan todos los procesos que tienen libc. Por eso su Pss de 605 kB es menor que su Rss, ya que el costo se reparte entre ellos. pmap -x mostró la misma shell con 5944 kB de RSS en total, y vmstat -s y free -h reportaron unos 31 GiB de RAM con 740 MiB usados y el swap sin uso.
+
+## Checkpoint 3 — VmRSS y conteo de page faults
+Capturas: capturas/p2_cp3_compilacion.png y capturas/p2_cp3_ejecucion.png
+
+En la primera prueba el programa de la guía mostró VmRSS de 2080 kB antes y después del memset, sin ningún cambio. Esto pasó porque system() lanza un grep aparte, y para ese grep /proc/self es su propio proceso, así que se leía la memoria del grep y no la de pagefault_demo. Por lo tanto se ajustó el programa para armar la ruta /proc/PID/status con el getpid() del propio programa. Hecho esto, el VmRSS reflejó la memoria real del proceso.
+
+| Momento | VmPeak | VmRSS |
+|---|---|---|
+| Antes del memset | 105132 kB | 1740 kB |
+| Después del memset | 105132 kB | 104140 kB |
+
+VmPeak ya incluye los 100 MB desde el inicio porque malloc reserva las direcciones virtuales, pero el VmRSS solo crece después del memset, exactamente 102400 kB, que son los 100 MB. Esto se debe a que malloc no genera page faults inmediatamente, ya que el kernel usa demand paging y solo asigna un marco físico cuando el proceso escribe por primera vez en cada página. Con /usr/bin/time -v se registraron 26008 minor faults, cerca de las 25 600 páginas de 4 KB que tienen 100 MB más las del arranque del programa. Un minor fault se resuelve en RAM sin leer el disco, en cambio un major fault necesita traer la página desde el disco, y en esta corrida solo hubo 1, junto con una sola entrada de sistema de archivos en el mismo reporte.

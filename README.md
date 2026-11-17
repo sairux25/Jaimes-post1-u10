@@ -35,3 +35,25 @@ En la primera prueba el código de la guía, que lee el array byte por byte, dio
 | 65536 | 11.540 | RAM ← salto L3 a RAM |
 
 Los saltos aparecen justo al superar los 48 KB de la L1d, los 1280 KB de la L2 y los 24 MB de la L3, lo que confirma que corresponden a los tamaños detectados en el Checkpoint 1. El valor de 4 KB salió más alto que el de 8 KB en todas las corridas, pero no se toma como un cambio de nivel porque 8, 16 y 32 KB vuelven a quedar cerca de 0.7 ns.
+
+## Checkpoint 3 — Comparativa secuencial vs aleatorio
+Capturas: capturas/p1_cp3_compilacion.png y capturas/p1_cp3_ejecucion.png
+
+Se agregó bench_rand, que mezcla un array de índices con Fisher-Yates y luego lee los enteros en ese orden aleatorio, y main() se modificó para medir los dos patrones con los mismos tamaños. El código de la guía funcionó sin cambios y las dos columnas quedaron en ns por acceso.
+
+| Array (KB) | Secuencial | Aleatorio |
+|---|---|---|
+| 4 | 1.139 | 2.402 |
+| 8 | 0.776 | 1.913 |
+| 16 | 0.727 | 2.565 |
+| 32 | 0.719 | 1.826 |
+| 64 | 1.041 | 1.300 |
+| 128 | 1.007 | 1.520 |
+| 256 | 1.053 | 1.349 |
+| 512 | 1.072 | 1.563 |
+| 1024 | 1.042 | 1.698 |
+| 4096 | 1.547 | 2.226 |
+| 16384 | 1.977 | 14.627 |
+| 65536 | 7.738 | 35.807 |
+
+Hasta 4 MB el acceso aleatorio se mantiene entre 1.3 y 2.6 ns, porque los datos todavía se encuentran en L1, L2 o L3 y cada fallo de L1 se resuelve en un nivel de caché cercano. En 16 MB, en cambio, el aleatorio sube a 14.627 ns mientras el secuencial queda en 1.977 ns. Ese salto se atribuye sobre todo al TLB miss, ya que 16 MB son 4096 páginas de 4 KB y cada acceso salta a una página distinta que el TLB no alcanza a cubrir. A esto se suma el cache miss en L3, porque el array de índices ocupa el doble que el de datos y entre los dos superan los 24 MB de la L3. En 64 MB el array ya no cabe en ninguna caché, por lo tanto cada lectura aleatoria paga el cache miss hasta RAM y además el TLB miss, y llega a 35.807 ns, unas 4.6 veces el valor secuencial.

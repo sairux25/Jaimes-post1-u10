@@ -37,6 +37,33 @@ double bench_seq(size_t n_bytes) {
     return ns / (reps * (double)(n_bytes / LINE)); /* ns/acceso */
 }
 
+/* Acceso aleatorio usando indices pre-mezclados (Fisher-Yates) */
+double bench_rand(size_t n_bytes) {
+    size_t n = n_bytes / sizeof(int);
+    int *arr = (int *)malloc(n * sizeof(int));
+    size_t *idx = (size_t *)malloc(n * sizeof(size_t));
+    if (!arr || !idx) return -1.0;
+
+    for (size_t i = 0; i < n; i++) { arr[i] = i; idx[i] = i; }
+    /* Mezcla Fisher-Yates */
+    for (size_t i = n-1; i > 0; i--) {
+        size_t j = rand() % (i+1);
+        size_t tmp = idx[i]; idx[i] = idx[j]; idx[j] = tmp;
+    }
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    volatile long sum = 0;
+    for (int r = 0; r < REPEAT; r++)
+        for (size_t i = 0; i < n; i++)
+            sum += arr[idx[i]];
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+
+    free(arr); free(idx);
+    double ns = (t1.tv_sec-t0.tv_sec)*1e9+(t1.tv_nsec-t0.tv_nsec);
+    return ns/(REPEAT*(double)n); /* ns/acceso */
+}
+
 int main(void) {
     size_t sizes[] = {
         4*1024, 8*1024, 16*1024, 32*1024,  /* region L1 (L1d de 48K) */
@@ -47,10 +74,11 @@ int main(void) {
     };
     int n = sizeof(sizes)/sizeof(sizes[0]);
 
-    printf("%-12s %10s\n","Array (KB)","ns/acceso");
+    printf("%-12s %12s %12s\n","Array (KB)","Secuencial","Aleatorio");
     for (int i = 0; i < n; i++) {
-        double lat = bench_seq(sizes[i]);
-        printf("%-12zu %10.3f\n", sizes[i]/1024, lat);
+        double lat_seq = bench_seq(sizes[i]);
+        double lat_rand = bench_rand(sizes[i]);
+        printf("%-12zu %12.3f %12.3f\n", sizes[i]/1024, lat_seq, lat_rand);
     }
     return 0;
 }
